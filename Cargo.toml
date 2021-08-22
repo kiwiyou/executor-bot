@@ -4,9 +4,16 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+aho-corasick = "0.7.18"
 eyre = "0.6.5"
-futures = "0.3.16"
-regex = "1.5.4"
-telegram-bot = "0.8.0"
+log = "0.4.14"
+once_cell = "1.8.0"
+pretty_env_logger = "0.4.0"
+teloxide = { version = "0.5.1", features = ["auto-send", "macros"] }
 tempfile = "3.2.0"
-tokio = { version = "0.2", features = ["full"] }
+tokio = { version = "1.10.0", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+] }
+tokio-stream = "0.1.7"
