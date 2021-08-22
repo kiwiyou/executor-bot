@@ -36,10 +36,11 @@ async fn on_text(cx: UpdateWithCx<AutoSend<Bot>, Message>) {
             if !is_replied {
                 cx.reply_to(
                     "사용할 수 있는 언어 목록입니다.\n\
-                    /help - 도움말을 봅니다.
-                    /run - 스크립트를 실행합니다.
-                    ",
-                );
+                    /help - 도움말을 봅니다.\n\
+                    /run - 스크립트를 실행합니다.",
+                )
+                .await
+                .expect("Telegram fail");
             }
         }
         Some(ExecutorCommand::Run) => {
