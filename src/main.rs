@@ -204,7 +204,7 @@ const LANGUAGES: &[Language] = &[
     Language {
         code: "cpp",
         ext: "cc",
-        compile: &["g++ -std=c++20 -o main -O3 main.cc"],
+        compile: &["g++ -std=c++2a -o main -O3 main.cc"],
         run: "./main",
     },
     Language {
