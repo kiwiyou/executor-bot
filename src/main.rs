@@ -1,8 +1,9 @@
 use std::env;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use command::{init_parser, Args, CommandMatcher, ExecutorCommand};
+use log::info;
 use once_cell::sync::Lazy;
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
@@ -17,6 +18,11 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 static MATCHER: Lazy<CommandMatcher<ExecutorCommand>> = Lazy::new(init_parser);
 
 async fn on_text(cx: UpdateWithCx<AutoSend<Bot>, Message>) {
+    let from = if let Some(from) = cx.update.from() {
+        from
+    } else {
+        return;
+    };
     let text = if let Some(text) = cx.update.text() {
         text
     } else {
@@ -78,12 +84,20 @@ async fn on_text(cx: UpdateWithCx<AutoSend<Bot>, Message>) {
                 return;
             };
             let code = args.as_str();
+            let script_begin = Instant::now();
             let run = if is_replied {
                 run_script(lang, &code, text)
             } else {
                 run_script(lang, &code, "")
             }
             .await;
+            let script_end = Instant::now();
+            info!(
+                "user {} invoked {} code in {:#?}",
+                from.id,
+                lang.code,
+                script_end - script_begin
+            );
             let response = match run {
                 Ok(stdout) => {
                     if stdout.is_empty() {
@@ -150,30 +164,22 @@ async fn run_script(lang: &Language, code: &str, input: &str) -> eyre::Result<St
             eyre::bail!(msg.to_string());
         }
     }
-    Command::new("/bin/sh")
-        .args(&["-c", "ulimit -f 100 -v 2000000"])
-        .spawn()?
-        .wait()
-        .await?;
     let mut child = Command::new("firejail")
         .args(&["--quiet", "--net=none"])
         .arg(format!("--private-cwd={}", dir.path().display()))
-        .args(&["/bin/sh", "-c", lang.run])
+        .args(&["/bin/bash", "-c"])
+        .arg(format!("ulimit -v 2000000 -f 100 && {}", lang.run))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()?;
-    Command::new("/bin/sh")
-        .args(&["-c", "ulimit unlimited"])
-        .spawn()?
-        .wait()
-        .await?;
     let stdin = child.stdin.as_mut().expect("Stdin must be piped");
     stdin.write_all(input.as_bytes()).await?;
     let wait = child.wait_with_output();
     let output = tokio::time::timeout(Duration::from_secs(5), wait).await??;
     if !output.status.success() {
-        let msg = String::from_utf8_lossy(&output.stderr);
+        let msg = String::from_utf8_lossy(&output.stderr) + String::from_utf8_lossy(&output.stdout);
         Err(eyre::eyre!(msg.to_string()))
     } else {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -223,7 +229,7 @@ const LANGUAGES: &[Language] = &[
         code: "js",
         ext: "js",
         compile: &[],
-        run: "node --max-old-space-size=1500 main.js",
+        run: "node --max-old-space-size=2000 main.js",
     },
     Language {
         code: "sh",
@@ -241,6 +247,6 @@ const LANGUAGES: &[Language] = &[
         code: "java",
         ext: "java",
         compile: &["mv main.java Main.java", "javac Main.java"],
-        run: "java -Xmx1500m Main",
+        run: "java -XX:MaxHeapSize=512m -XX:InitialHeapSize=512m -XX:CompressedClassSpaceSize=64m -XX:MaxMetaspaceSize=128m Main",
     },
 ];
