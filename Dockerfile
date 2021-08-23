@@ -11,7 +11,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
     apt-get -y upgrade && \
     apt-get -y install --no-install-recommends build-essential g++ gcc python3 \
-    curl openssl ca-certificates ghc llvm nodejs bash golang-go default-jdk && \
+    curl openssl ca-certificates ghc llvm nodejs bash golang-go default-jdk firejail && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \

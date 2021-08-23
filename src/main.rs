@@ -150,12 +150,13 @@ async fn run_script(lang: &Language, code: &str, input: &str) -> eyre::Result<St
             eyre::bail!(msg.to_string());
         }
     }
-    let mut child = Command::new("/bin/sh")
-        .current_dir(dir.path())
-        .args(&["-c", lang.run])
+    let mut child = Command::new("firejail")
+        .args(&["--quiet", "--rlimit-as=134217728", "--net=none"])
+        .arg(format!("--private-cwd={}", dir.path().display()))
+        .args(&["/bin/sh", "-c", lang.run])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()?;
     let stdin = child.stdin.as_mut().expect("Stdin must be piped");
     stdin.write_all(input.as_bytes()).await?;
