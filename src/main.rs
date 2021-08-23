@@ -35,9 +35,9 @@ async fn on_text(cx: UpdateWithCx<AutoSend<Bot>, Message>) {
         Some(ExecutorCommand::Help) | None => {
             if !is_replied {
                 cx.reply_to(
-                    "사용할 수 있는 언어 목록입니다.\n\
+                    "사용할 수 있는 명령어 목록입니다.\n\
                     /help - 도움말을 봅니다.\n\
-                    /run - 스크립트를 실행합니다.",
+                    /eval - 스크립트를 실행합니다.",
                 )
                 .await
                 .expect("Telegram fail");
@@ -52,7 +52,7 @@ async fn on_text(cx: UpdateWithCx<AutoSend<Bot>, Message>) {
                 if !is_replied {
                     cx.reply_to(format!(
                         "사용법이 잘못되었습니다.\n\
-                            /run <언어> <코드>\n\
+                            /eval <언어> <코드>\n\
                             <언어>로 <코드>를 실행합니다.\n\
                             {}",
                         available_languages()
@@ -111,7 +111,7 @@ async fn main() {
     let bot = Bot::from_env().auto_send();
 
     Dispatcher::new(bot)
-        .messages_handler(|rx| UnboundedReceiverStream::new(rx).for_each_concurrent(None, on_text))
+        .messages_handler(|rx| UnboundedReceiverStream::new(rx).for_each(on_text))
         .dispatch()
         .await;
 }
@@ -150,14 +150,24 @@ async fn run_script(lang: &Language, code: &str, input: &str) -> eyre::Result<St
             eyre::bail!(msg.to_string());
         }
     }
+    Command::new("/bin/sh")
+        .args(&["-c", "ulimit -f 100 -v 2000000"])
+        .spawn()?
+        .wait()
+        .await?;
     let mut child = Command::new("firejail")
-        .args(&["--quiet", "--rlimit-as=134217728", "--net=none"])
+        .args(&["--quiet", "--net=none"])
         .arg(format!("--private-cwd={}", dir.path().display()))
         .args(&["/bin/sh", "-c", lang.run])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    Command::new("/bin/sh")
+        .args(&["-c", "ulimit unlimited"])
+        .spawn()?
+        .wait()
+        .await?;
     let stdin = child.stdin.as_mut().expect("Stdin must be piped");
     stdin.write_all(input.as_bytes()).await?;
     let wait = child.wait_with_output();
@@ -213,7 +223,7 @@ const LANGUAGES: &[Language] = &[
         code: "js",
         ext: "js",
         compile: &[],
-        run: "node main.js",
+        run: "node --max-old-space-size=1500 main.js",
     },
     Language {
         code: "sh",
@@ -231,6 +241,6 @@ const LANGUAGES: &[Language] = &[
         code: "java",
         ext: "java",
         compile: &["mv main.java Main.java", "javac Main.java"],
-        run: "java Main",
+        run: "java -Xmx1500m Main",
     },
 ];
