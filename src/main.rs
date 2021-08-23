@@ -125,7 +125,7 @@ async fn main() {
     let bot = Bot::from_env().auto_send();
 
     Dispatcher::new(bot)
-        .messages_handler(|rx| UnboundedReceiverStream::new(rx).for_each(on_text))
+        .messages_handler(|rx| UnboundedReceiverStream::new(rx).for_each_concurrent(None, on_text))
         .dispatch()
         .await;
 }
