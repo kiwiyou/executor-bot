@@ -137,7 +137,7 @@ async fn run_script(lang: &Language, code: &str, input: &str) -> eyre::Result<St
             "--private-cwd",
             "--private-opt=none",
             "--private-etc=none",
-            "--private-tmp=none",
+            "--private-tmp",
         ])
         .arg(format!("--private={}", dir.path().display()))
         .args(&["/bin/bash", "-c"])
