@@ -1,18 +1,12 @@
 use std::env;
-use std::process::Stdio;
-use std::time::{Duration, Instant};
 
 use command::{init_parser, Args, CommandMatcher, ExecutorCommand};
-use log::info;
+use log::error;
 use once_cell::sync::Lazy;
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
-use teloxide::utils::markdown::code_block;
-use tempfile::tempdir;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
 mod command;
+pub mod language;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 static MATCHER: Lazy<CommandMatcher<ExecutorCommand>> = Lazy::new(init_parser);
@@ -37,84 +31,23 @@ async fn on_text(cx: UpdateWithCx<AutoSend<Bot>, Message>) {
     if !cmd_line.starts_with('/') {
         return;
     }
-    match MATCHER.find(&cmd_line[1..]) {
-        Some(ExecutorCommand::Help) | None => {
-            if !is_replied {
-                cx.reply_to(
-                    "사용할 수 있는 명령어 목록입니다.\n\
-                    /help - 도움말을 봅니다.\n\
-                    /eval - 스크립트를 실행합니다.",
-                )
-                .await
-                .expect("Telegram fail");
-            }
+    // first character of cmd_line is '/'
+    let mut args = Args::wrap(&cmd_line[1..]);
+    if let Some(mut label) = args.next() {
+        if let Some(username_pos) = label.rfind('@') {
+            label = &label[..username_pos];
         }
-        Some(ExecutorCommand::Run) => {
-            let mut args = Args::wrap(&cmd_line);
-            args.next();
-            let lang_code = if let Some(code) = args.next() {
-                code
-            } else {
-                if !is_replied {
-                    cx.reply_to(format!(
-                        "사용법이 잘못되었습니다.\n\
-                            /eval <언어> <코드>\n\
-                            <언어>로 <코드>를 실행합니다.\n\
-                            {}",
-                        available_languages()
-                    ))
-                    .await
-                    .expect("Telegram fail");
+        if let Some(command) = MATCHER.find(label) {
+            let result = match command {
+                ExecutorCommand::Help if !is_replied => command::handler::help(cx).await,
+                ExecutorCommand::Run => {
+                    command::handler::run(&cx, from, args, text, is_replied).await
                 }
-                return;
+                _ => Ok(()),
             };
-            let lang = if let Some(lang) = LANGUAGES.iter().find(|lang| lang.code == lang_code) {
-                lang
-            } else {
-                if !is_replied {
-                    cx.reply_to(format!(
-                        "{}은(는) 사용할 수 없는 언어입니다.\n\
-                            {}",
-                        lang_code,
-                        available_languages()
-                    ))
-                    .await
-                    .expect("Telegram fail");
-                }
-                return;
-            };
-            let code = args.as_str();
-            let script_begin = Instant::now();
-            let run = if is_replied {
-                run_script(lang, &code, text)
-            } else {
-                run_script(lang, &code, "")
+            if let Err(e) = result {
+                error!("an error occurred processing update: {}", e);
             }
-            .await;
-            let script_end = Instant::now();
-            info!(
-                "user {} invoked {} code in {:#?}",
-                from.id,
-                lang.code,
-                script_end - script_begin
-            );
-            let response = match run {
-                Ok(stdout) => {
-                    if stdout.is_empty() {
-                        "(출력 없음)".into()
-                    } else {
-                        stdout
-                    }
-                }
-                Err(error) => {
-                    format!("오류가 발생했습니다.\n{}", error.to_string())
-                }
-            };
-            let trunc: String = response.chars().take(1500).collect();
-            cx.reply_to(code_block(&trunc))
-                .parse_mode(ParseMode::MarkdownV2)
-                .await
-                .expect("Telegram fail");
         }
     }
 }
@@ -129,124 +62,3 @@ async fn main() {
         .dispatch()
         .await;
 }
-
-fn available_languages() -> String {
-    let mut out = "사용 가능한 언어:\n".to_string();
-    let langs: String = LANGUAGES
-        .iter()
-        .map(|l| l.code.to_string())
-        .reduce(|mut prev, s| {
-            prev.push_str(", ");
-            prev.push_str(&s);
-            prev
-        })
-        .expect("LANGAUGES must have one or more elements");
-    out.push_str(&langs);
-    out
-}
-
-async fn run_script(lang: &Language, code: &str, input: &str) -> eyre::Result<String> {
-    let dir = tempdir()?;
-    let mut path = dir.path().join("main");
-    path.set_extension(lang.ext);
-    std::fs::write(path, code)?;
-    for compile in lang.compile {
-        let output = Command::new("/bin/sh")
-            .current_dir(dir.path())
-            .args(&["-c", compile])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .await?;
-        if !output.status.success() {
-            let msg = String::from_utf8_lossy(&output.stderr);
-            eyre::bail!(msg.to_string());
-        }
-    }
-    let mut child = Command::new("firejail")
-        .args(&["--quiet", "--net=none"])
-        .arg(format!("--private-cwd={}", dir.path().display()))
-        .args(&["/bin/bash", "-c"])
-        .arg(format!("ulimit -v 2000000 -f 100 && {}", lang.run))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let stdin = child.stdin.as_mut().expect("Stdin must be piped");
-    stdin.write_all(input.as_bytes()).await?;
-    let wait = child.wait_with_output();
-    let output = tokio::time::timeout(Duration::from_secs(5), wait).await??;
-    if !output.status.success() {
-        let msg = String::from_utf8_lossy(&output.stderr) + String::from_utf8_lossy(&output.stdout);
-        Err(eyre::eyre!(msg.to_string()))
-    } else {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.to_string())
-    }
-}
-
-struct Language {
-    code: &'static str,
-    ext: &'static str,
-    compile: &'static [&'static str],
-    run: &'static str,
-}
-
-const LANGUAGES: &[Language] = &[
-    Language {
-        code: "rs",
-        ext: "rs",
-        compile: &["rustc --edition=2018 -O -o main main.rs"],
-        run: "./main",
-    },
-    Language {
-        code: "cpp",
-        ext: "cc",
-        compile: &["g++ -std=c++2a -o main -O3 main.cc"],
-        run: "./main",
-    },
-    Language {
-        code: "hs",
-        ext: "hs",
-        compile: &["ghc -fllvm -dynamic -o main main.hs"],
-        run: "./main",
-    },
-    Language {
-        code: "c",
-        ext: "c",
-        compile: &["gcc -std=c17 -o main -O3 main.c"],
-        run: "./main",
-    },
-    Language {
-        code: "py",
-        ext: "py",
-        compile: &["python3 -c 'import py_compile; py_compile.compile(\"main.py\")'"],
-        run: "python3 main.py",
-    },
-    Language {
-        code: "js",
-        ext: "js",
-        compile: &[],
-        run: "node --max-old-space-size=2000 main.js",
-    },
-    Language {
-        code: "sh",
-        ext: "sh",
-        compile: &["chmod +x main.sh"],
-        run: "bash main.sh",
-    },
-    Language {
-        code: "go",
-        ext: "go",
-        compile: &["go build main.go"],
-        run: "./main",
-    },
-    Language {
-        code: "java",
-        ext: "java",
-        compile: &["mv main.java Main.java", "javac Main.java"],
-        run: "java -XX:MaxHeapSize=512m -XX:InitialHeapSize=512m -XX:CompressedClassSpaceSize=64m -XX:MaxMetaspaceSize=128m Main",
-    },
-];

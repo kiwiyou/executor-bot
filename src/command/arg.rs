@@ -1,29 +1,21 @@
-use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
+use std::collections::HashMap;
 
 pub struct CommandMatcher<Enum> {
-    matcher: AhoCorasick,
-    map: Vec<Enum>,
+    matcher: HashMap<String, Enum>,
 }
 
 impl<Enum: Clone> CommandMatcher<Enum> {
     pub fn new(labels: &[&str], enums: &[Enum]) -> Self {
-        let matcher = AhoCorasickBuilder::new()
-            .match_kind(aho_corasick::MatchKind::LeftmostLongest)
-            .auto_configure(labels)
-            .build(labels);
-        Self {
-            matcher,
-            map: enums.to_vec(),
-        }
+        let map = labels
+            .iter()
+            .map(ToString::to_string)
+            .zip(enums.iter().cloned())
+            .collect();
+        Self { matcher: map }
     }
 
     pub fn find(&self, text: &str) -> Option<Enum> {
-        let first_match = self.matcher.find(text)?;
-        if first_match.start() != 0 {
-            None
-        } else {
-            self.map.get(first_match.pattern()).cloned()
-        }
+        self.matcher.get(text).cloned()
     }
 }
 
