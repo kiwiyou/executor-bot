@@ -131,7 +131,14 @@ async fn run_script(lang: &Language, code: &str, input: &str) -> eyre::Result<St
         }
     }
     let mut child = Command::new("firejail")
-        .args(&["--quiet", "--net=none", "--private-cwd"])
+        .args(&[
+            "--quiet",
+            "--net=none",
+            "--private-cwd",
+            "--private-opt=none",
+            "--private-etc=none",
+            "--private-tmp=none",
+        ])
         .arg(format!("--private={}", dir.path().display()))
         .args(&["/bin/bash", "-c"])
         .arg(format!("ulimit -v 2000000 -f 100 && {}", lang.run))
